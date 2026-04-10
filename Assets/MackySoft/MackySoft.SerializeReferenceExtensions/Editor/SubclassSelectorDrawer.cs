@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
+using UnityEditor.UIElements;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace MackySoft.SerializeReferenceExtensions.Editor
 {
@@ -32,6 +34,175 @@ namespace MackySoft.SerializeReferenceExtensions.Editor
         private readonly Dictionary<string, GUIContent> typeNameCaches = new Dictionary<string, GUIContent>();
 
         private SerializedProperty targetProperty;
+
+        public override VisualElement CreatePropertyGUI (SerializedProperty property)
+        {
+            if (property.propertyType != SerializedPropertyType.ManagedReference)
+            {
+                return new Label(IsNotManagedReferenceLabel.text);
+            }
+
+            var root = new VisualElement();
+
+            // Header row: expand toggle + property label + type selector button.
+            var header = new VisualElement();
+            header.style.flexDirection = FlexDirection.Row;
+            header.style.alignItems = Align.Center;
+            header.style.minHeight = EditorGUIUtility.singleLineHeight;
+
+            var expandToggle = new Toggle();
+            expandToggle.AddToClassList("unity-foldout__toggle");
+            expandToggle.style.marginLeft = 0;
+            expandToggle.style.marginRight = 2;
+            expandToggle.style.marginTop = 0;
+            expandToggle.style.marginBottom = 0;
+            expandToggle.style.flexShrink = 0;
+
+            var propLabel = new Label(property.displayName);
+            propLabel.tooltip = property.tooltip;
+            propLabel.AddToClassList("unity-property-field__label");
+            propLabel.style.flexShrink = 0;
+
+            var typeButton = new Button();
+            typeButton.AddToClassList("unity-base-popup-field__input");
+            typeButton.style.flexGrow = 1;
+            typeButton.style.unityTextAlign = TextAnchor.MiddleLeft;
+            typeButton.style.overflow = Overflow.Hidden;
+            typeButton.style.marginLeft = 0;
+            typeButton.style.marginRight = 0;
+            typeButton.style.marginTop = 1;
+            typeButton.style.marginBottom = 1;
+            typeButton.style.paddingLeft = 4;
+
+            header.Add(expandToggle);
+            header.Add(propLabel);
+            header.Add(typeButton);
+
+            // Content area for child properties (shown when the foldout is expanded).
+            var content = new VisualElement();
+            content.AddToClassList("unity-foldout__content");
+
+            root.Add(header);
+            root.Add(content);
+
+            // Track the last typename so the content is only rebuilt when the assigned type changes,
+            // not whenever a child field value changes.
+            string lastTypename = property.managedReferenceFullTypename;
+
+            void UpdateHeader (SerializedProperty p)
+            {
+                bool hasType = !string.IsNullOrEmpty(p.managedReferenceFullTypename);
+                typeButton.text = GetTypeName(p).text;
+
+#if UNITY_2021_3_OR_NEWER
+                var attr = (SubclassSelectorAttribute)attribute;
+                if (attr.UseToStringAsLabel && hasType && !p.hasMultipleDifferentValues)
+                {
+                    object managedValue = p.managedReferenceValue;
+                    propLabel.text = (managedValue != null) ? managedValue.ToString() : property.displayName;
+                }
+                else
+                {
+                    propLabel.text = property.displayName;
+                }
+#endif
+
+                expandToggle.style.visibility = hasType ? Visibility.Visible : Visibility.Hidden;
+                expandToggle.SetValueWithoutNotify(hasType && p.isExpanded);
+                content.style.display = (hasType && p.isExpanded) ? DisplayStyle.Flex : DisplayStyle.None;
+            }
+
+            void RebuildContent (SerializedProperty p)
+            {
+                content.Clear();
+                string typename = p.managedReferenceFullTypename;
+                if (string.IsNullOrEmpty(typename))
+                {
+                    return;
+                }
+
+                Type propertyType = ManagedReferenceUtility.GetType(typename);
+                if (propertyType != null && PropertyDrawerCache.TryGetPropertyDrawer(propertyType, out PropertyDrawer customDrawer))
+                {
+                    VisualElement customElement = customDrawer.CreatePropertyGUI(p.Copy());
+                    if (customElement != null)
+                    {
+                        content.Add(customElement);
+                        content.Bind(p.serializedObject);
+                        return;
+                    }
+
+                    // The custom drawer has no UIToolkit support; fall back to IMGUI.
+                    string propPath = p.propertyPath;
+                    SerializedObject serializedObj = p.serializedObject;
+                    content.Add(new IMGUIContainer(() =>
+                    {
+                        SerializedProperty currentProp = serializedObj.FindProperty(propPath);
+                        if (currentProp == null) return;
+                        float height = customDrawer.GetPropertyHeight(currentProp, GUIContent.none);
+                        Rect rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(height));
+                        customDrawer.OnGUI(rect, currentProp, GUIContent.none);
+                        serializedObj.ApplyModifiedProperties();
+                    }));
+                    return;
+                }
+
+                // Default: render each immediate child as a PropertyField.
+                foreach (SerializedProperty child in p.GetChildProperties())
+                {
+                    content.Add(new PropertyField(child.Copy()));
+                }
+                content.Bind(p.serializedObject);
+            }
+
+            typeButton.clicked += () =>
+            {
+                TypePopupCache popupCache = GetTypePopup(property);
+                targetProperty = property;
+                popupCache.TypePopup.Show(typeButton.worldBound);
+            };
+
+            expandToggle.RegisterValueChangedCallback(evt =>
+            {
+                property.isExpanded = evt.newValue;
+                property.serializedObject.ApplyModifiedPropertiesWithoutUndo();
+                content.style.display = evt.newValue ? DisplayStyle.Flex : DisplayStyle.None;
+                if (evt.newValue && content.childCount == 0)
+                {
+                    RebuildContent(property);
+                }
+            });
+
+            root.TrackPropertyValue(property, p =>
+            {
+                string currentTypename = p.managedReferenceFullTypename;
+                bool typeChanged = currentTypename != lastTypename;
+                lastTypename = currentTypename;
+
+                UpdateHeader(p);
+
+                if (typeChanged)
+                {
+                    if (p.isExpanded && !string.IsNullOrEmpty(currentTypename))
+                    {
+                        RebuildContent(p);
+                    }
+                    else
+                    {
+                        content.Clear();
+                    }
+                }
+            });
+
+            // Initial render.
+            UpdateHeader(property);
+            if (property.isExpanded && !string.IsNullOrEmpty(property.managedReferenceFullTypename))
+            {
+                RebuildContent(property);
+            }
+
+            return root;
+        }
 
         public override void OnGUI (Rect position, SerializedProperty property, GUIContent label)
         {
@@ -75,9 +246,7 @@ namespace MackySoft.SerializeReferenceExtensions.Editor
                     foldoutRect.height = EditorGUIUtility.singleLineHeight;
 
 #if UNITY_2022_2_OR_NEWER && !UNITY_6000_0_OR_NEWER && !UNITY_2022_3
-                    // NOTE: Position x must be adjusted.
-                    // FIXME: Is there a more essential solution...?
-                    // The most promising is UI Toolkit, but it is currently unable to reproduce all of SubclassSelector features. (Complete provision of contextual menu, e.g.)
+                    // NOTE: Position x must be adjusted in certain Unity versions (IMGUI only).
                     // 2021.3: No adjustment
                     // 2022.1: No adjustment
                     // 2022.2: Adjustment required
