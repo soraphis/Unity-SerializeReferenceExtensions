@@ -46,6 +46,7 @@ namespace MackySoft.SerializeReferenceExtensions.Editor
 
             // A drawer can be shared by several properties. Each binding owns its view and popup target.
             var selector = new SubclassSelectorField(property, GetPropertyLabel(property), ((SubclassSelectorAttribute)attribute).UseToStringAsLabel,
+                ((SubclassSelectorAttribute)attribute).FilterMethod,
                 UnityPropertyDrawerUtility.CaptureNextNestingLevel(property));
             return DecoratorGUI.CreateGUI(selector, property);
         }
@@ -202,20 +203,27 @@ namespace MackySoft.SerializeReferenceExtensions.Editor
             // Cache this string. This property internally call Assembly.GetName, which result in a large allocation.
             string managedReferenceFieldTypename = property.managedReferenceFieldTypename;
 
-            if (!typePopups.TryGetValue(managedReferenceFieldTypename, out TypePopupCache result))
-            {
-                var state = new AdvancedDropdownState();
+            string filterMethod = ((SubclassSelectorAttribute)attribute).FilterMethod;
+            bool hasFilter = !string.IsNullOrEmpty(filterMethod);
 
-                Type baseType = ManagedReferenceUtility.GetType(managedReferenceFieldTypename);
-                var types = TypeSearchService.TypeCandiateService.GetDisplayableTypes(baseType);
-                var popup = new AdvancedTypePopup(
-                    types,
-                    MaxTypePopupLineCount,
-                    state
-                );
-                result = new TypePopupCache(popup, state);
-                typePopups.Add(managedReferenceFieldTypename, result);
+            if (typePopups.TryGetValue(managedReferenceFieldTypename, out TypePopupCache cached))
+            {
+                if (hasFilter)
+                {
+                    // The filter depends on the owner's current state, so re-evaluate on every open.
+                    Type cachedBaseType = ManagedReferenceUtility.GetType(managedReferenceFieldTypename);
+                    var cachedTypes = TypeSearchService.TypeCandiateService.GetDisplayableTypes(cachedBaseType);
+                    cached.TypePopup.SetTypes(SubclassSelectorFilter.Apply(property, filterMethod, cachedTypes));
+                }
+                return cached;
             }
+
+            var state = new AdvancedDropdownState();
+            Type baseType = ManagedReferenceUtility.GetType(managedReferenceFieldTypename);
+            var types = SubclassSelectorFilter.Apply(property, filterMethod, TypeSearchService.TypeCandiateService.GetDisplayableTypes(baseType));
+            var popup = new AdvancedTypePopup(types, MaxTypePopupLineCount, state);
+            var result = new TypePopupCache(popup, state);
+            typePopups.Add(managedReferenceFieldTypename, result);
             return result;
         }
 

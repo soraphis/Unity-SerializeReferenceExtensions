@@ -14,6 +14,7 @@ namespace MackySoft.SerializeReferenceExtensions.Editor
         private readonly SerializedObject serializedObject;
         private readonly string defaultLabel;
         private readonly bool useToStringAsLabel;
+        private readonly string filterMethod;
         private readonly string propertyPath;
         private readonly int drawerNestingLevel;
         private readonly Toggle header;
@@ -37,8 +38,9 @@ namespace MackySoft.SerializeReferenceExtensions.Editor
 
         public override VisualElement contentContainer => headerSlot ?? base.contentContainer;
 
-        internal SubclassSelectorField (SerializedProperty property, string label, bool useToStringAsLabel, int drawerNestingLevel)
+        internal SubclassSelectorField (SerializedProperty property, string label, bool useToStringAsLabel, string filterMethod, int drawerNestingLevel)
         {
+            this.filterMethod = filterMethod;
             serializedObject = property.serializedObject;
             defaultLabel = label;
             this.useToStringAsLabel = useToStringAsLabel;
@@ -430,7 +432,7 @@ namespace MackySoft.SerializeReferenceExtensions.Editor
                 return;
             }
             Type baseType = ManagedReferenceUtility.GetType(fieldTypeName);
-            var types = TypeSearchService.TypeCandiateService.GetDisplayableTypes(baseType);
+            var types = SubclassSelectorFilter.Apply(property, filterMethod, TypeSearchService.TypeCandiateService.GetDisplayableTypes(baseType));
             if (typePopup == null)
             {
                 typePopup = new AdvancedTypePopup(types, 13, new AdvancedDropdownState());

@@ -13,4 +13,11 @@ public sealed class SubclassSelectorAttribute : PropertyAttribute
     public bool UseToStringAsLabel { get; set; }
 #endif
 
+    /// <summary>
+    /// Name of a method on the object that declares the field (instance or static, any visibility) used to
+    /// filter the types offered in the type popup. Signature: <c>IEnumerable&lt;Type&gt; Method (IEnumerable&lt;Type&gt; candidates)</c>.
+    /// Use <c>nameof(...)</c>. Editor-only: evaluated when the popup opens.
+    /// </summary>
+    public string FilterMethod { get; set; }
+
 }
